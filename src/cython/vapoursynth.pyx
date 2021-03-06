@@ -24,6 +24,8 @@ from libc.stdint cimport intptr_t, uint16_t, uint32_t
 from cpython.buffer cimport (PyBUF_WRITABLE, PyBUF_FORMAT, PyBUF_STRIDES,
                              PyBUF_F_CONTIGUOUS)
 from cpython.ref cimport Py_INCREF, Py_DECREF
+from libc.math cimport floor
+
 import os
 import ctypes
 import threading
@@ -1552,13 +1554,24 @@ cdef class VideoNode(object):
         for n in range(min(prefetch, d.total)):
             self.funcs.getFrameAsync(n, self.node, frameDoneCallbackOutput, <void *>d)
 
+        collect_every = self.num_frames / (prefetch * 2)
+        collected = 0
+
         stored_exception = None
-        while d.total != d.completed:
-            try:
-                d.condition.wait()
-            except BaseException, e:
-                d.total = d.requested
-                stored_exception = e
+        try:
+            while d.total != d.completed:
+                try:
+                    d.condition.wait()
+
+                    if floor(d.total / collect_every) > collected:
+                        gc.collect()
+                        collected += 1
+                except BaseException, e:
+                    d.total = d.requested
+                    stored_exception = e
+        finally:
+            gc.collect()
+
         d.condition.release()
         
         if stored_exception is not None:
